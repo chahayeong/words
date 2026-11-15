@@ -1,5 +1,5 @@
 // 앱 화면 파일만 캐시 (단어 데이터는 항상 시트에서 새로 받음)
-const CACHE = 'words-v2';
+const CACHE = 'words-v4';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
