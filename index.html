@@ -77,13 +77,16 @@
   .memo-btn { font-size: 1.05rem; font-weight: 700; padding: 8px 16px; border-radius: 999px;
     border: 1px solid var(--good); color: var(--good); }
   .memo-btn:active { background: rgba(95,211,154,.15); }
-  .memo-btn.undo { border-color: var(--bad); color: var(--bad); }
+  .memo-btn.on { background: var(--good); color: #0f1115; }
+  .memo-btn.on:active { background: #4bb884; }
 
   /* 위: 영단어 영역 (높이 고정 → 뜻을 열어도 움직이지 않음) */
   .head { flex: 0 0 40%; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    padding: 56px 48px 12px; border-bottom: 1px solid var(--line); }
-  .word { font-size: clamp(2.4rem, 12vw, 3.6rem); font-weight: 800; text-align: center;
-    word-break: break-word; line-height: 1.15; letter-spacing: .01em; }
+    padding: 56px 6px 12px; border-bottom: 1px solid var(--line); }
+  /* 글자 크기는 JS(fitWord)가 한 줄에 맞게 자동 조절 */
+  .word { width: 100%; font-size: 58px; font-weight: 800; text-align: center;
+    white-space: nowrap; overflow: hidden; line-height: 1.15; letter-spacing: .01em; }
+  .word.wrap { white-space: normal; word-break: break-word; overflow: visible; }
   .pron { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; min-height: 52px; }
   .ipa { font-size: 1.4rem; color: var(--sub); font-family: "Segoe UI", "Lucida Sans Unicode", "Arial Unicode MS", sans-serif; }
   .speak { width: 52px; height: 52px; border-radius: 50%; background: var(--surface2);
@@ -104,12 +107,13 @@
     padding: 1px 8px; border-radius: 6px; margin-right: 8px; vertical-align: 2px; font-weight: 700; }
 
   /* 좌우 이동 화살표 (카드 위에 겹쳐서, 영단어 영역 높이에 맞춤) */
-  .nav { position: absolute; top: 12px; height: calc((100% - 24px) * 0.4); width: 46px; z-index: 3;
+  /* 위쪽 64px은 빈도·외움 버튼 자리라 비워둠 */
+  .nav { position: absolute; top: 76px; height: calc((100% - 24px) * 0.4 - 64px); width: 46px; z-index: 3;
     font-size: 2.6rem; color: var(--sub); display: grid; place-items: center; opacity: .75; }
   .nav:active { color: var(--text); opacity: 1; }
   .nav:disabled { opacity: .15; }
-  .nav.prev { left: 12px; border-radius: 22px 0 0 0; }
-  .nav.next { right: 12px; border-radius: 0 22px 0 0; }
+  .nav.prev { left: 12px; }
+  .nav.next { right: 12px; }
 
   .toast { position: fixed; left: 16px; right: 16px; bottom: 24px; background: #2d323d;
     border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; font-size: 1.15rem;
@@ -338,8 +342,6 @@
     S.list = shuffle(S.words.filter(w => mode === 'done' ? isMem(w) : !isMem(w)));
     S.i = 0;
     $('deckTitle').textContent = mode === 'done' ? '외운 단어' : S.deck;
-    $('memo').textContent = mode === 'done' ? '외움 취소' : '외움';
-    $('memo').classList.toggle('undo', mode === 'done');
     showScreen('study');
     render();
   }
@@ -375,11 +377,13 @@
     setOpen(false);
     $('body').scrollTop = 0;
     $('word').textContent = w.w;
+    fitWord();
     $('counter').textContent = (S.i + 1) + ' / ' + S.list.length;
     $('freq').textContent = '빈도 ' + w.f;
     $('freq').classList.toggle('hidden', !w.f);
     $('my').textContent = w.m || '(시트에 적은 뜻 없음)';
     $('my').classList.toggle('empty', !w.m);
+    updateMemoBtn(w);
     $('prev').disabled = S.i === 0;
     $('next').disabled = S.i === S.list.length - 1;
     $('ipa').textContent = '';
@@ -389,6 +393,24 @@
     // 다음 2개 단어 미리 불러오기 (뜻 + 발음 음성)
     S.list.slice(S.i + 1, S.i + 3).forEach(x => getInfo(x.w));
   }
+
+  /* 영단어를 최대한 한 줄에: 58px부터 줄여가며 맞춤, 24px로도 안 되면 두 줄 */
+  const WORD_MAX = 58, WORD_MIN = 24;
+  function fitWord() {
+    const el = $('word');
+    el.classList.remove('wrap');
+    let size = WORD_MAX;
+    el.style.fontSize = size + 'px';
+    while (el.scrollWidth > el.clientWidth && size > WORD_MIN) {
+      size -= 2;
+      el.style.fontSize = size + 'px';
+    }
+    if (el.scrollWidth > el.clientWidth) {
+      el.classList.add('wrap');
+      el.style.fontSize = '32px';
+    }
+  }
+  window.addEventListener('resize', () => { if (!$('study').classList.contains('hidden')) fitWord(); });
 
   function renderInfo(info) {
     $('ipa').textContent = info.ipa || '';
@@ -511,39 +533,35 @@
     }
   });
 
-  /* ---------------- 외움 / 외움 취소 ---------------- */
-  let undoTimer = null, lastMemo = null;
+  /* ---------------- 외움 체크 ----------------
+   * 누르면 체크만 켜고 끔(카드는 그대로). 체크는 바로 저장되고,
+   * 단어장을 나갔다 오거나 새로고침하면 그때 '외운 단어'로 옮겨짐.
+   */
+  let toastTimer = null;
+  function updateMemoBtn(w) {
+    const on = isMem(w);
+    $('memo').textContent = on ? '✓ 외움' : '외움';
+    $('memo').classList.toggle('on', on);
+  }
   $('memo').addEventListener('click', e => {
     e.stopPropagation();
     const w = S.list[S.i]; if (!w) return;
-    const on = S.mode === 'learn';
-    lastMemo = { w, i: S.i, deck: S.deck, mode: S.mode, on };
-    S.list.splice(S.i, 1);
-    setMem(w, on);
-    animate(1, render);
-    showToast('"' + w.w + '" ' + (on ? '외움' : '외움 취소'));
-  });
-  function setMem(w, on) {
     const k = w.w.toLowerCase();
+    const on = !S.mem.has(k);
     if (on) S.mem.add(k); else S.mem.delete(k);
-    call('setMemorized', S.deck, w.w, on).catch(() => showToast('저장 실패 – 인터넷 연결을 확인하세요', true));
-  }
-  $('toastUndo').addEventListener('click', () => {
-    if (!lastMemo) return;
-    const m = lastMemo; lastMemo = null;
-    hideToast();
-    if (m.deck !== S.deck) return;
-    setMem(m.w, !m.on);
-    if (m.mode === S.mode && !$('study').classList.contains('hidden')) {
-      S.list.splice(m.i, 0, m.w); S.i = m.i; render();
-    }
+    updateMemoBtn(w);
+    call('setMemorized', S.deck, w.w, on).catch(() => {
+      if (on) S.mem.delete(k); else S.mem.add(k);
+      if (S.list[S.i] === w) updateMemoBtn(w);
+      showToast('저장 실패 – 인터넷 연결을 확인하세요');
+    });
   });
-  function showToast(t, noUndo) {
+  function showToast(t) {
     $('toastText').textContent = t;
-    $('toastUndo').classList.toggle('hidden', !!noUndo);
+    $('toastUndo').classList.add('hidden');
     $('toast').classList.remove('hidden');
-    clearTimeout(undoTimer);
-    undoTimer = setTimeout(hideToast, 4000);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, 4000);
   }
   function hideToast() { $('toast').classList.add('hidden'); }
 
